@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/exo-framework/exo/migrator"
 	"github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
@@ -22,13 +23,15 @@ import (
 // Framework is a struct that holds the fiber.App instance and the configuration for the exo framework.
 type Framework struct {
 	*fiber.App
-	config Config
+	config   Config
+	Migrator *migrator.Migrator
 }
 
 // New creates a new instance of the exo framework.
 // The instance is a fiber.App instance with custom JSON encoder and decoder and some default configurations.
 func New(opts ...ConfigOption) *Framework {
 	config := getConfig(opts)
+	mig := migrator.New()
 
 	app := &Framework{fiber.New(fiber.Config{
 		ErrorHandler: config.errorHandler,
@@ -38,7 +41,7 @@ func New(opts ...ConfigOption) *Framework {
 		JSONEncoder: func(v interface{}) ([]byte, error) {
 			return json.Marshal(v)
 		},
-	}), config}
+	}), config, mig}
 
 	app.Use(recover.New(recover.Config{
 		EnableStackTrace: true,
@@ -108,7 +111,7 @@ func (f *Framework) startHTTP() {
 }
 
 func (f *Framework) initializeDB() {
-	if f.config.db != nil {
-		return
+	if err := f.Migrator.Initialize(f.config.db); err != nil {
+		log.Fatal(err)
 	}
 }
