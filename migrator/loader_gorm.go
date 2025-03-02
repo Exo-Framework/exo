@@ -3,8 +3,18 @@ package migrator
 import (
 	"fmt"
 
+	"github.com/goccy/go-json"
 	"gorm.io/gorm"
 )
+
+func (m *Migrator) LoadGormSchemaForExternal() (string, error) {
+	schema, err := m.loadGormSchema()
+	if err != nil {
+		return "", err
+	}
+
+	return gormSchemaToDataString(schema)
+}
 
 func (m *Migrator) loadGormSchema() ([]*schemaTable, error) {
 	tables := make([]*schemaTable, 0)
@@ -212,4 +222,22 @@ func (m *Migrator) loadGormSchema() ([]*schemaTable, error) {
 	}
 
 	return tables, nil
+}
+
+func dataStringToGormSchema(data string) ([]*schemaTable, error) {
+	schema := make([]*schemaTable, 0)
+	if err := json.Unmarshal([]byte(data), &schema); err != nil {
+		return nil, err
+	}
+
+	return schema, nil
+}
+
+func gormSchemaToDataString(schema []*schemaTable) (string, error) {
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return "", err
+	}
+
+	return string(data), nil
 }

@@ -6,13 +6,8 @@ import (
 	"strings"
 )
 
-func (m *Migrator) generateDiffUpAndDownCode(initial bool) ([]string, []string, error) {
+func (m *Migrator) generateDiffUpAndDownCode(initial bool, gormSchema []*schemaTable) ([]string, []string, error) {
 	dbSchema, err := m.loadDbSchema(initial)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	gormSchema, err := m.loadGormSchema()
 	if err != nil {
 		return nil, nil, err
 	}

@@ -24,4 +24,11 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(generateCmd)
+
+	rootCmd.AddCommand(migrationsCmd)
+	migrationsCmd.AddCommand(migrationsGenerateCmd)
+	migrationsCmd.AddCommand(migrationsDiffCmd)
+	migrationsCmd.AddCommand(migrationsUpCmd)
+	migrationsCmd.AddCommand(migrationsDownCmd)
+	migrationsCmd.AddCommand(migrationsExecuteCmd)
 }

@@ -2,8 +2,10 @@ package exo
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 
 	"github.com/exo-framework/exo/migrator"
@@ -111,7 +113,24 @@ func (f *Framework) startHTTP() {
 }
 
 func (f *Framework) initializeDB() {
+	if slices.Contains(os.Args, "--exo-migrator-callback") {
+		gormSchema, err := f.Migrator.LoadGormSchemaForExternal()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Println(gormSchema)
+		os.Exit(0)
+		return
+	}
+
 	if err := f.Migrator.Initialize(f.config.db); err != nil {
 		log.Fatal(err)
+	}
+
+	if f.config.autoMigrate {
+		if err := f.Migrator.ExecuteAll(migrator.Up); err != nil {
+			log.Fatal(err)
+		}
 	}
 }

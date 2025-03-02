@@ -3,23 +3,39 @@ package migrator
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/exo-framework/exo/common"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
+type MigrateDir bool
+
+const (
+	Up   MigrateDir = true
+	Down MigrateDir = false
+)
+
 // Migrator is a struct that holds the models to be migrated.
 type Migrator struct {
-	isInitialized bool
-	models        []interface{}
-	db            *gorm.DB
+	isInitialized      bool
+	db                 *gorm.DB
+	models             []any
+	migrations         []string
+	executedMigrations []string
 }
 
 // New creates a new migrator instance.
 func New() *Migrator {
 	return &Migrator{
-		models: []interface{}{},
+		models:             []any{},
+		migrations:         []string{},
+		executedMigrations: []string{},
 	}
 }
 
@@ -79,10 +95,284 @@ func (m *Migrator) Initialize(edb *gorm.DB) error {
 		return fmt.Errorf("error creating detailed_schema_info view: %w", err)
 	}
 
+	if err := m.loadMigrationFiles(); err != nil {
+		return fmt.Errorf("error loading migration files: %w", err)
+	}
+
+	if err := m.loadExecutedMigrations(); err != nil {
+		return fmt.Errorf("error loading executed migrations: %w", err)
+	}
+
 	return nil
 }
 
 // AddModel adds a model to the migrator.
-func (m *Migrator) AddModel(model interface{}) {
-	m.models = append(m.models, model)
+func (m *Migrator) AddModel(models ...any) {
+	m.models = append(m.models, models...)
+}
+
+// Generates a new and empty migration file.
+func (m *Migrator) GenereteEmptyMigration() (string, error) {
+	return m.createMigrationFile([]string{"# Fill out as you need"}, []string{"# Fill out as you need"})
+}
+
+// Generates a diff migration file. A diff migration file is a migration file that contains the changes between the current database schema and the models.
+// If asInitial is true, the diff migration file will contain the up migration code to create the database schema from scratch.
+func (m *Migrator) GenerateDiffMigration(asInitial bool, gormSchemaData string) (string, error) {
+	gormSchema, err := dataStringToGormSchema(gormSchemaData)
+	if err != nil {
+		return "", err
+	}
+
+	upSqlCode, downSqlCode, err := m.generateDiffUpAndDownCode(asInitial, gormSchema)
+	if err != nil {
+		return "", err
+	}
+
+	if len(upSqlCode) == 0 || len(downSqlCode) == 0 {
+		return "", fmt.Errorf("no changes detected")
+	}
+
+	return m.createMigrationFile(upSqlCode, downSqlCode)
+}
+
+// ListMigrations lists all migrations.
+func (m *Migrator) ListMigrations() error {
+	println()
+	println("Executed Migrations:")
+	for _, version := range m.executedMigrations {
+		print("  -", version)
+
+		if m.isUpDeleted(version) {
+			print(" (up deleted)")
+		}
+
+		if m.isDownDeleted(version) {
+			print(" (down deleted)")
+		}
+
+		println()
+	}
+
+	println()
+	println("Pending Migrations:")
+	for _, version := range m.migrations {
+		if !m.isExecuted(version) {
+			println("  -", version)
+		}
+	}
+
+	return nil
+}
+
+// ExecuteAll migrates all migrations which are not executed (if dir is Up) or all migrations which are executed (if dir is Down).
+func (m *Migrator) ExecuteAll(dir MigrateDir) error {
+	if dir == Up {
+		for _, version := range m.migrations {
+			if !m.isExecuted(version) {
+				if err := m.Execute(version, dir); err != nil {
+					return err
+				}
+			}
+		}
+	} else if dir == Down {
+		a := append([]string{}, m.executedMigrations...)
+		slices.Reverse(a)
+
+		for _, version := range a {
+			if err := m.Execute(version, dir); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// Execute migrates a single migration.
+func (m *Migrator) Execute(version string, dir MigrateDir) error {
+	p := m.getMigrationFilePath(version, dir)
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		println("WARNING: migration file not found:", p)
+		return nil
+	}
+
+	if dir == Up {
+		if m.isExecuted(version) {
+			println("WARNING: migration already executed:", version)
+			return nil
+		}
+
+		println("Uping migration:", version)
+	} else if dir == Down {
+		if !m.isExecuted(version) {
+			println("WARNING: migration not executed:", version)
+			return nil
+		}
+
+		println("Downing migration:", version)
+	} else {
+		return fmt.Errorf("invalid migration direction")
+	}
+
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return fmt.Errorf("error reading migration file: %w", err)
+	}
+
+	code := string(b)
+	code = "BEGIN;\n" + code + "\nCOMMIT;"
+
+	tx := m.db.Begin()
+	defer tx.Rollback()
+
+	if err := tx.Exec(code).Error; err != nil {
+		return fmt.Errorf("error executing migration: %w", err)
+	}
+
+	if dir == Up {
+		if err := tx.Exec("INSERT INTO __migrations__ (version) VALUES (?)", version).Error; err != nil {
+			return fmt.Errorf("error updating migrations table: %w", err)
+		}
+	} else if dir == Down {
+		if err := tx.Exec("DELETE FROM __migrations__ WHERE version = ?", version).Error; err != nil {
+			return fmt.Errorf("error updating migrations table: %w", err)
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("error committing transaction: %w", err)
+	}
+
+	println("Migration executed:", version)
+
+	return nil
+}
+
+// LoadGormSchemaForExternal loads the Gorm schema by starting the current Go code base and calling the Gorm schema callback.
+func (m *Migrator) LoadExternalGormSchema() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("error getting current working directory: %w", err)
+	}
+
+	cmd := exec.Command("go", "run", ".", "--exo-migrator-callback")
+	cmd.Dir = cwd
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("error running go command: %w", err)
+	}
+
+	return string(out), nil
+}
+
+func (m *Migrator) isExecuted(version string) bool {
+	for _, executed := range m.executedMigrations {
+		if executed == version {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m *Migrator) isUpDeleted(version string) bool {
+	p := m.getMigrationFilePath(version, Up)
+	_, err := os.Stat(p)
+	return os.IsNotExist(err)
+}
+
+func (m *Migrator) isDownDeleted(version string) bool {
+	p := m.getMigrationFilePath(version, Down)
+	_, err := os.Stat(p)
+	return os.IsNotExist(err)
+}
+
+func (m *Migrator) getMigrationFilePath(version string, dir MigrateDir) string {
+	if dir == Up {
+		return path.Join(getMigrationsDir(), fmt.Sprintf("%s.up.sql", version))
+	}
+
+	return path.Join(getMigrationsDir(), fmt.Sprintf("%s.down.sql", version))
+}
+
+func (m *Migrator) loadExecutedMigrations() error {
+	if !m.isInitialized {
+		return fmt.Errorf("migration manager is not initialized")
+	}
+
+	if err := m.db.Table("__migrations__").Select("version").Find(&m.executedMigrations).Error; err != nil {
+		return fmt.Errorf("error loading executed migrations: %w", err)
+	}
+
+	return nil
+}
+
+func (m *Migrator) createMigrationFile(upCode []string, downCode []string) (string, error) {
+	dir := getMigrationsDir()
+	version := time.Now().Format("20060102150405")
+
+	upFile, err := os.Create(path.Join(dir, fmt.Sprintf("%s.up.sql", version)))
+	if err != nil {
+		return "", fmt.Errorf("error creating migration file: %w", err)
+	}
+
+	defer upFile.Close()
+
+	for _, line := range upCode {
+		upFile.WriteString(line)
+	}
+
+	downFile, err := os.Create(path.Join(dir, fmt.Sprintf("%s.down.sql", version)))
+	if err != nil {
+		return "", fmt.Errorf("error creating migration file: %w", err)
+	}
+
+	defer downFile.Close()
+
+	for _, line := range downCode {
+		downFile.WriteString(line)
+	}
+
+	return version, nil
+}
+
+func (m *Migrator) loadMigrationFiles() error {
+	dir := getMigrationsDir()
+
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("error reading migrations directory: %w", err)
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		name := file.Name()
+		version := strings.Split(name, ".")[0]
+
+		if !strings.HasSuffix(name, ".up.sql") && !strings.HasSuffix(name, ".down.sql") {
+			continue
+		}
+
+		if !slices.Contains(m.migrations, version) {
+			m.migrations = append(m.migrations, version)
+		}
+	}
+
+	slices.Sort(m.migrations)
+
+	return nil
+}
+
+func getMigrationsDir() string {
+	p := ".migrations"
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		os.Mkdir(p, os.ModePerm)
+	}
+
+	return p
 }

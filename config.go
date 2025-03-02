@@ -71,6 +71,7 @@ type Config struct {
 	cors         CorsConfig
 	auth         AuthConfig
 	db           *gorm.DB
+	autoMigrate  bool
 }
 
 func (c Config) addr() string {
@@ -176,6 +177,13 @@ func WithSSL(cert tls.Certificate) ConfigOption {
 func WithDB(db *gorm.DB) ConfigOption {
 	return func(c *Config) {
 		c.db = db
+	}
+}
+
+// AutoMigration enables the automatic migration of the database schema in the configuration.
+func AutoMigration() ConfigOption {
+	return func(c *Config) {
+		c.autoMigrate = true
 	}
 }
 
