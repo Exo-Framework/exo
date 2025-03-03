@@ -37,7 +37,10 @@ func exog_getTest(c *v2.Ctx) error {
 	}
 	q_Name := c.Query("name")
 	q_Name2 := c.Query("name2")
-	q_Dto := GetTestDto{}
+	q_Dto := struct {
+		Id   int    `json:"id"`
+		Name string `json:"name"`
+	}{}
 	if q_Dto_err := c.BodyParser(&q_Dto); q_Dto_err != nil {
 		return c.Status(400).SendString(q_Dto_err.Error())
 	}

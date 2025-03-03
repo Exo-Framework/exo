@@ -180,6 +180,22 @@ func (g *Generator) extractRequestStruct(name string, structType *ast.StructType
 			if x, ok := sel.X.(*ast.Ident); ok {
 				fieldType = x.Name + "." + sel.Sel.Name
 			}
+		} else if s, ok := field.Type.(*ast.StructType); ok {
+			fieldType = "struct {"
+			for _, field := range s.Fields.List {
+				if len(field.Names) == 0 {
+					continue
+				}
+
+				fieldName := field.Names[0].Name
+				fieldType += fmt.Sprintf(" %s %s", fieldName, field.Type)
+				if field.Tag != nil {
+					fieldType += fmt.Sprintf(" %s", field.Tag.Value)
+				}
+
+				fieldType += ";"
+			}
+			fieldType += " }"
 		}
 
 		tagValue := ""

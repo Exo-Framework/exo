@@ -15,10 +15,14 @@ type GetTest struct {
 	Name2         string                   `query:""`                                  // this will load the query parameter "name2" into the Name2 field. Omitting the name will use the field name in camel case notation
 	Authorization string                   `header:"Authorization"`                    // this will load the header "Authorization" into the Authorization field
 	Validator     string                   `header:"Validator" validate:"onValidator"` // this will load the header "Validator" into the Validator field and validate it using the onValidator function
-	Dto           GetTestDto               `body:""`                                   // this will load the body into the Dto field
-	Form          string                   `form:""`                                   // this will load the form parameter "form" into the Form field
-	FormNamed     string                   `form:"form_named"`                         // this will load the form parameter "form_named" into the FormNamed field
-	SomeDbModel   SomeDbModel              `path:"id" db:"id"`                         // this will load the path parameter "id" and uses it as WHERE against the SomeDbModel table to load the SomeDbModel field. If not found is returned, 404 is returned. If db is left empty, the default primary key is used
+	//Dto           GetTestDto               `body:""`                                   // this will load the body into the Dto field
+	Form        string      `form:""`           // this will load the form parameter "form" into the Form field
+	FormNamed   string      `form:"form_named"` // this will load the form parameter "form_named" into the FormNamed field
+	SomeDbModel SomeDbModel `path:"id" db:"id"` // this will load the path parameter "id" and uses it as WHERE against the SomeDbModel table to load the SomeDbModel field. If not found is returned, 404 is returned. If db is left empty, the default primary key is used
+	Dto         struct {
+		Id   int    `json:"id"`   // this will load the json field "id" into the Id field
+		Name string `json:"name"` // this will load the json field "name" into the Name field
+	} `body:""` // this will load the body into the Dto field
 }
 
 type GetTestDto struct {
